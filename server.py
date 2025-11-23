@@ -2,30 +2,26 @@ import os
 import json
 import requests
 import time
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
+from flask import Flask, request, jsonify
+# We need to import send_file, but removed the root route that needed it for live hosting
+from flask_cors import CORS 
 
 # --- Configuration ---
-# NOTE: The API key below has been updated with the key you provided.
-# Using environment variables (GEMINI_API_KEY) is still the recommended best practice for security,
-# but using this value as the default ensures the app runs immediately.
+# BEST PRACTICE: API Key should be set via environment variable for security.
+# The PLACEHOLDER_KEY is only a fail-safe for local testing.
 PLACEHOLDER_KEY = "AIzaSyBiKJJPloihS1aFZABMu8Cvy2mgiK8oGWU"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", PLACEHOLDER_KEY)
 
-if not GEMINI_API_KEY or GEMINI_API_KEY == PLACEHOLDER_KEY:
-    # Use a print statement instead of raising an error for clearer console output
-    print("------------------------------------------------------------------")
-    print("WARNING: Using hardcoded API key or GEMINI_API_KEY environment variable is not set.")
-    print("For security, it is highly recommended to set the API key using an environment variable.")
-    print("------------------------------------------------------------------")
-else:
-    print("\n------------------------------------------------------------------")
-    print("  Gemini API Key Status: Loaded from Environment Variable")
-    print("------------------------------------------------------------------")
-
+# --- Flask Initialization and CORS Configuration ---
 app = Flask(__name__)
-# Enable CORS for local development, allowing the client (even if opened directly) to talk to the server
-CORS(app) 
+
+# Live Hosting Configuration:
+# 1. In a live environment where the frontend is hosted separately (e.g., Netlify/Vercel), 
+#    we must allow Cross-Origin Resource Sharing (CORS).
+# 2. For simplicity and broad compatibility with separate static hosting, we allow all origins ('*').
+#    If you knew the exact final domain (e.g., 'https://your-notes-app.com'), 
+#    you would set CORS(app, origins=['https://your-notes-app.com']).
+CORS(app, resources={r"/*": {"origins": "*"}}) 
 
 # Base URLs for the Gemini API
 GEMINI_SUMMARIZE_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={GEMINI_API_KEY}"
@@ -34,11 +30,9 @@ GEMINI_TTS_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemin
 # --- Helper Functions ---
 def fetch_gemini_api(url, payload):
     """Handles the POST request to the Gemini API with exponential backoff."""
-    global GEMINI_API_KEY, PLACEHOLDER_KEY
-    # The check below is now less critical since you provided a real key,
-    # but it remains to alert if the env var is not set and the default key is used.
-    # We remove the EnvironmentError raise to allow the updated PLACEHOLDER_KEY to work.
-
+    if not GEMINI_API_KEY or GEMINI_API_KEY == PLACEHOLDER_KEY:
+         raise EnvironmentError("GEMINI_API_KEY is not set. Please configure it in your hosting environment.")
+         
     headers = {
         'Content-Type': 'application/json'
     }
@@ -59,10 +53,9 @@ def fetch_gemini_api(url, payload):
                 continue
             # Handle other HTTP errors
             error_details = response.json() if response.text else "No error message provided."
-            print(f"HTTP Error {response.status_code}: {error_details}")
             # If the error is 400 or 403, it's highly likely an invalid API key
             if response.status_code in [400, 403]:
-                error_message = f"API Key likely invalid or not configured correctly. Status {response.status_code}. Details: {error_details}"
+                error_message = f"API Key invalid or rate limit exceeded. Status {response.status_code}. Details: {error_details}"
                 raise requests.exceptions.HTTPError(error_message, response=response)
             
             raise requests.exceptions.HTTPError(f"API call failed with status {response.status_code}", response=response)
@@ -106,8 +99,9 @@ def summarize():
             print(f"API Response Error: {api_response}")
             return jsonify({"error": "Failed to generate summary from the model."}), 500
 
+    except EnvironmentError as e:
+        return jsonify({"error": str(e)}), 500
     except requests.exceptions.HTTPError as e:
-        # Pass the HTTP error message back to the client
         return jsonify({"error": f"API Request Failed: {e}"}), 500
     except Exception as e:
         print(f"Summarization Error: {e}")
@@ -149,30 +143,22 @@ def read_aloud():
             print(f"TTS API Response Error: {api_response}")
             return jsonify({"error": "Invalid audio data received from API or model failed to generate audio."}), 500
 
+    except EnvironmentError as e:
+        return jsonify({"error": str(e)}), 500
     except requests.exceptions.HTTPError as e:
-        # Pass the HTTP error message back to the client
         return jsonify({"error": f"API Request Failed: {e}"}), 500
     except Exception as e:
         print(f"TTS Error: {e}")
         return jsonify({"error": f"Server Error during TTS generation: {e}"}), 500
 
-@app.route('/')
-def serve_index():
-    """Serve the index.html file."""
-    # Assuming index.html is in the same directory as server.py
-    return send_file('index.html')
-
+# Removed the @app.route('/') to serve index.html. 
+# In a standard web host setup, the frontend (index.html) is served by a static host (like Netlify/Vercel), 
+# and the Python backend only serves the API routes.
 
 if __name__ == '__main__':
-    # Add time import for exponential backoff helper
-    import time
+    # Use environment variable for the port, defaulting to 5000 for local development.
+    # Hosting platforms like Render/Heroku will set the PORT variable automatically.
+    port = int(os.environ.get('PORT', 5000))
     
-    # We moved the key check and status message outside the main block for clearer output
-    print("\n------------------------------------------------------------------")
-    print("  Starting Flask Server...")
-    print("  Access the app at: http://127.0.0.1:5000/")
-    print("  Stop the server with CTRL+C")
-    print("------------------------------------------------------------------\n")
-    # If debug=True, Flask automatically imports time again. 
-    # Since it's already imported at the top, this is safe.
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # We use host='0.0.0.0' to listen on all public IPs, which is required for hosting providers.
+    app.run(host='0.0.0.0', port=port, debug=False) # debug=False for production safety
