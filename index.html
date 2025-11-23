@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SAAR - Local Summarization</title>
+    <title>SAAR - AI Summarization</title>
     <!-- Load Tailwind CSS from CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Use Inter font family -->
@@ -50,8 +50,8 @@
     <!-- Header / Navigation (Simplified) -->
     <header class="bg-gray-900 border-b border-gray-700/50 p-4">
         <div class="max-w-7xl mx-auto flex justify-between items-center">
-            <a href="#" class="text-2xl font-extrabold text-gradient">SAAR (Local)</a>
-            <span class="text-sm text-gray-500">Connecting to Python Backend on localhost:5000</span>
+            <a href="#" class="text-2xl font-extrabold text-gradient">SAAR</a>
+            <span class="text-sm text-gray-500">Connecting to Live AI Backend</span> 
         </div>
     </header>
 
@@ -61,7 +61,7 @@
             <h1 class="text-4xl md:text-6xl font-extrabold mb-3 leading-tight">
                 Get the <span class="text-gradient">Conciseness You Need</span>
             </h1>
-            <p class="text-gray-400 text-lg md:text-xl">Instantly summarize text using your local Gemini API proxy.</p>
+            <p class="text-gray-400 text-lg md:text-xl">Instantly summarize text using your custom Python API.</p>
         </header>
 
         <!-- Main Input and Output Area -->
@@ -123,10 +123,14 @@
 
     <!-- Footer -->
     <footer class="mt-16 p-6 border-t border-gray-700/50 text-center text-gray-500">
-        <p>&copy; 2025 SAAR - Local Version. Powered by Gemini API via Python Flask server.</p>
+        <p>&copy; 2025 SAAR. Powered by Gemini API via custom Python server.</p>
     </footer>
     
     <script>
+        // --- CONFIGURATION ---
+        // IMPORTANT: The URL has been updated to your live Render backend service.
+        const BACKEND_URL = 'https://saar-ai-backend-5ri2.onrender.com'; 
+        
         // --- DOM ELEMENT CACHING & UTILITIES ---
         const sourceTextEl = document.getElementById('source-text');
         const summarizeButton = document.getElementById('summarize-button');
@@ -152,7 +156,7 @@
                         continue;
                     }
                     if (!response.ok) {
-                        const errorBody = await response.json(); // Server returns JSON error
+                        const errorBody = await response.json().catch(() => ({ error: `HTTP status ${response.status}` }));
                         throw new Error(errorBody.error || `Server call failed with status: ${response.status}`);
                     }
                     return response;
@@ -251,38 +255,62 @@
         }
 
         // Helper function to convert PCM audio data to a WAV Blob (Signed 16-bit PCM)
+        // **This function ensures explicit little-endian byte order for the WAV header.**
         function pcmToWav(pcm16, sampleRate) {
             const numChannels = 1;
             const bitDepth = 16;
             const bytesPerSample = bitDepth / 8;
             const blockAlign = numChannels * bytesPerSample;
             const byteRate = sampleRate * blockAlign;
-            const dataSize = pcm16.byteLength;
+            const dataSize = pcm16.byteLength; // pcm16 is an Int16Array, its byteLength is correct
+            
+            // Total buffer size: 44 bytes for header + data size
             const buffer = new ArrayBuffer(44 + dataSize);
             const view = new DataView(buffer);
+            
+            // Write utility function (defaults to little-endian: true)
+            let offset = 0;
+            const writeString = (str) => {
+                for (let i = 0; i < str.length; i++) {
+                    view.setUint8(offset + i, str.charCodeAt(i));
+                }
+                offset += str.length;
+            };
 
             // RIFF header
-            view.setUint32(0, 0x52494646, false); // "RIFF"
-            view.setUint32(4, 36 + dataSize, true); // ChunkSize
-            view.setUint32(8, 0x57415645, false); // "WAVE"
+            writeString("RIFF"); // 0 - 3
+            view.setUint32(offset, 36 + dataSize, true); // 4 - 7 (ChunkSize)
+            offset += 4;
+            writeString("WAVE"); // 8 - 11
 
             // fmt sub-chunk
-            view.setUint32(12, 0x666d7420, false); // "fmt "
-            view.setUint32(16, 16, true); // Subchunk1Size (16 for PCM)
-            view.setUint16(20, 1, true); // AudioFormat (1 for PCM)
-            view.setUint16(22, numChannels, true);
-            view.setUint32(24, sampleRate, true);
-            view.setUint32(28, byteRate, true);
-            view.setUint16(32, blockAlign, true);
-            view.setUint16(34, bitDepth, true);
+            writeString("fmt "); // 12 - 15
+            view.setUint32(offset, 16, true); // 16 - 19 (Subchunk1Size: 16 for PCM)
+            offset += 4;
+            view.setUint16(offset, 1, true); // 20 - 21 (AudioFormat: 1 for PCM)
+            offset += 2;
+            view.setUint16(offset, numChannels, true); // 22 - 23
+            offset += 2;
+            view.setUint32(offset, sampleRate, true); // 24 - 27
+            offset += 4;
+            view.setUint32(offset, byteRate, true); // 28 - 31
+            offset += 4;
+            view.setUint16(offset, blockAlign, true); // 32 - 33
+            offset += 2;
+            view.setUint16(offset, bitDepth, true); // 34 - 35
+            offset += 2;
 
             // data sub-chunk
-            view.setUint32(36, 0x64617461, false); // "data"
-            view.setUint32(40, dataSize, true);
+            writeString("data"); // 36 - 39
+            view.setUint32(offset, dataSize, true); // 40 - 43
+            offset += 4;
 
-            // Copy the PCM data
-            const pcmDataView = new Uint8Array(buffer, 44);
-            pcmDataView.set(new Uint8Array(pcm16.buffer));
+            // Write the PCM data to the buffer view starting at offset 44
+            for (let i = 0; i < pcm16.length; i++) {
+                // setInt16 ensures the correct signed 16-bit value is written in little-endian order
+                view.setInt16(offset, pcm16[i], true); 
+                offset += 2; // Move by 2 bytes for Int16
+            }
 
             return new Blob([buffer], { type: 'audio/wav' });
         }
@@ -344,9 +372,9 @@
 
             const summaryPrompt = createSummaryPrompt(sourceText, summaryOption);
             
-            // Fetch to the Python backend's summarize endpoint
+            // UPDATED: Use the live BACKEND_URL variable
             try {
-                const response = await fetchWithRetry('/summarize', {
+                const response = await fetchWithRetry(`${BACKEND_URL}/summarize`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ summaryPrompt }) // Send prompt to backend
@@ -381,15 +409,20 @@
                 return;
             }
 
-            const previousIcon = readAloudButton.querySelector('i').outerHTML;
+            // FIX: Store the full current innerHTML instead of querying for the <i> tag
+            // which Lucide replaces with an SVG, leading to the 'null' error.
+            const previousIcon = readAloudButton.innerHTML;
+            
             readAloudButton.innerHTML = `<i data-lucide="loader-2" class="w-5 h-5 text-white animate-spin"></i>`;
+            // Note: Since we use innerHTML, we need to run lucide.createIcons() to convert the new <i> to an SVG
+            lucide.createIcons(); 
             readAloudButton.disabled = true;
             
             setStatus("Generating and playing audio...", 'loading');
 
-            // Fetch to the Python backend's read-aloud endpoint
+            // Use the live BACKEND_URL variable
             try {
-                const response = await fetchWithRetry('/read-aloud', {
+                const response = await fetchWithRetry(`${BACKEND_URL}/read-aloud`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ textToSpeak }) // Send text to backend
@@ -400,12 +433,20 @@
                 const mimeType = result.mimeType;
 
                 if (audioData && mimeType && mimeType.startsWith("audio/L16")) {
-                    // API returns signed PCM16 audio data at a fixed sample rate (usually 24000)
-                    const sampleRate = 24000; 
+                    // Extract the sample rate from the mimeType string (e.g., "audio/L16;rate=24000")
+                    const rateMatch = mimeType.match(/rate=(\d+)/);
+                    
+                    if (!rateMatch || !rateMatch[1]) {
+                        throw new Error("Could not determine sample rate from MIME type. Response was missing rate.");
+                    }
+                    
+                    const sampleRate = parseInt(rateMatch[1], 10);
+                    
+                    // API returns signed PCM16 audio data
                     const pcmData = base64ToArrayBuffer(audioData);
                     const pcm16 = new Int16Array(pcmData);
                     
-                    // Convert PCM data to a playable WAV Blob
+                    // Convert PCM data to a playable WAV Blob using the extracted sampleRate
                     const wavBlob = pcmToWav(pcm16, sampleRate);
                     const audioUrl = URL.createObjectURL(wavBlob);
                     
@@ -414,32 +455,44 @@
                     audio.play();
 
                     setStatus("Audio playing...", 'info');
+                    console.log(`Successfully generated and playing audio. Blob URL: ${audioUrl}`);
 
                     // Wait for audio to finish before re-enabling controls
                     audio.onended = () => {
                         setStatus("Read aloud finished.", 'info');
-                        readAloudButton.innerHTML = previousIcon;
+                        readAloudButton.innerHTML = previousIcon; // Restore the original icon (now an SVG)
                         readAloudButton.disabled = false;
+                        URL.revokeObjectURL(audioUrl); // Clean up the blob URL
                     };
 
                     audio.onerror = (e) => {
                         console.error("Audio playback error:", e);
-                        setStatus("Error playing audio.", 'error');
+                        setStatus("Error playing audio. See console for details.", 'error');
                         readAloudButton.innerHTML = previousIcon;
+                        readAloudButton.disabled = false;
                     };
 
                 } else {
-                    throw new Error("Invalid audio data or mime type received from server.");
+                    throw new Error("Invalid audio data or mime type received from server. Mime type received: " + mimeType);
                 }
 
             } catch (error) {
                 console.error("TTS Server/API Error:", error);
-                setStatus(`TTS Error: ${error.message}`, 'error');
+                // Check if the error is related to API Key for a clearer message
+                let userFriendlyError = error.message.includes('API Key') ? 
+                    "API Key issue or rate limit exceeded on backend." : 
+                    `TTS Error: ${error.message}`;
+                    
+                setStatus(userFriendlyError, 'error');
             } finally {
-                // Revert button icon if still in loading state
-                if (readAloudButton.querySelector('.animate-spin')) {
-                    readAloudButton.innerHTML = previousIcon;
+                // If the process failed and the button is still in the loading state, restore the icon.
+                // We check if it's disabled, as the onended/onerror handlers also restore it.
+                if (readAloudButton.disabled) {
+                   readAloudButton.innerHTML = previousIcon;
+                   readAloudButton.disabled = false;
                 }
+                
+                // We don't run lucide.createIcons() here because the 'previousIcon' is already an SVG/properly converted structure.
             }
         });
         
