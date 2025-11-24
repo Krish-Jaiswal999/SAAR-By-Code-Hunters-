@@ -8,8 +8,9 @@ services:
     plan: free
     envVars:
         - key: GEMINI_API_KEY
-          sync: true
+          sync: false
           value: AIzaSyAcZRM-uzY3yPGqm8oz_eMLGtDZ-woKL1c
         - key: PYTHON_VERSION
           value: 3.10.12
+
 
